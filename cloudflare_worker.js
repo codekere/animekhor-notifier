@@ -56,11 +56,11 @@ async function handleTelegramUpdate(update, env) {
 
       await answerCallbackQuery(botToken, cb.id, "Starting cloud download...");
 
-      // Update message into Live Progress Bar (10%)
+      // Initializing Live Progress Bar (0.0%)
       const progressMsg =
-        `⏳ <b>Processing Best HD Video...</b>\n\n` +
-        `<code>[■□□□□□□□□□] 10%</code>\n` +
-        `Starting GitHub Actions runner to download and remove watermark. Please wait ~2-3 minutes...`;
+        `⏳ <b>Initiating Cloud Processing...</b>\n\n` +
+        `<code>[□□□□□□□□□□□□] 0.0%</code>\n\n` +
+        `🚀 <i>Starting GitHub Actions runner. Connecting to stream...</i>`;
 
       await editTelegramMessage(botToken, cbChatId, cbMsgId, progressMsg);
 
@@ -143,18 +143,10 @@ async function handleTelegramUpdate(update, env) {
       `\n📦 <b>Size:</b> ${info.size} (Best HD)\n` +
       `🔗 <b>Direct Link:</b>\n<code>${videoUrl}</code>`;
 
-    const keyboard = {
-      inline_keyboard: [
-        [
-          { text: `⬇️ Download Best HD (${info.size})`, callback_data: `confirm_dl:${vidId}` }
-        ]
-      ]
-    };
-
     if (cleanThumbUrl) {
-      await sendTelegramPhoto(botToken, chatId, cleanThumbUrl, caption, keyboard);
+      await sendTelegramPhoto(botToken, chatId, cleanThumbUrl, caption);
     } else {
-      await sendTelegram(botToken, chatId, caption, keyboard);
+      await sendTelegram(botToken, chatId, caption);
     }
     return;
   }

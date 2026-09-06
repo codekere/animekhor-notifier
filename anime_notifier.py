@@ -30,6 +30,7 @@ import re
 import time
 import glob
 import json
+import shutil
 import email.utils
 from datetime import timezone, timedelta
 import subprocess
@@ -55,6 +56,50 @@ DISMISS_KEYBOARD = {
         [{"text": "🗑️ Dismiss / Close", "callback_data": "dismiss"}]
     ]
 }
+
+
+def setup_ffmpeg():
+    """Ensure ffmpeg and ffprobe are discoverable in PATH across Windows and Linux."""
+    ff_bin = shutil.which("ffmpeg")
+    fp_bin = shutil.which("ffprobe")
+    if ff_bin and fp_bin:
+        return ff_bin, fp_bin
+
+    search_dirs = []
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    if local_app_data:
+        winget_dir = os.path.join(local_app_data, "Microsoft", "WinGet", "Packages")
+        if os.path.exists(winget_dir):
+            for root, dirs, files in os.walk(winget_dir):
+                if "ffmpeg.exe" in files:
+                    search_dirs.append(root)
+
+    program_files = os.environ.get("ProgramFiles", "C:\\Program Files")
+    search_dirs.extend([
+        "C:\\ffmpeg\\bin",
+        os.path.join(program_files, "ffmpeg", "bin"),
+        os.path.join(local_app_data, "ffmpeg", "bin")
+    ])
+
+    for d in search_dirs:
+        ff = os.path.join(d, "ffmpeg.exe") if os.name == "nt" else os.path.join(d, "ffmpeg")
+        fp = os.path.join(d, "ffprobe.exe") if os.name == "nt" else os.path.join(d, "ffprobe")
+        if os.path.exists(ff):
+            current_path = os.environ.get("PATH", "")
+            if d not in current_path:
+                os.environ["PATH"] = d + os.pathsep + current_path
+            print(f"[*] Configured FFmpeg in PATH from: {ff}")
+            ff_bin = ff
+            if os.path.exists(fp):
+                fp_bin = fp
+            break
+
+    ff_bin = shutil.which("ffmpeg") or ff_bin or "ffmpeg"
+    fp_bin = shutil.which("ffprobe") or fp_bin or "ffprobe"
+    return ff_bin, fp_bin
+
+
+FFMPEG_BIN, FFPROBE_BIN = setup_ffmpeg()
 
 
 def load_json(filepath: str, default=None):
@@ -94,12 +139,12 @@ def format_file_size(size_bytes: int) -> str:
     return f"{size_bytes:.1f} TB"
 
 
-def make_progress_bar(percent: int, width: int = 10) -> str:
-    """Generate visual ASCII progress bar."""
-    percent = max(0, min(100, percent))
-    filled = int(round(width * percent / 100))
+def make_progress_bar(percent: float, width: int = 12) -> str:
+    """Generate visual ASCII progress bar with granular decimal percentage."""
+    pct = max(0.0, min(100.0, float(percent)))
+    filled = int(round(width * pct / 100.0))
     bar = "■" * filled + "□" * (width - filled)
-    return f"[{bar}] {percent}%"
+    return f"[{bar}] {pct:.1f}%"
 
 
 def clean_title_for_display(raw_title: str) -> str:
@@ -184,7 +229,7 @@ def prepare_clean_thumbnail(video_url: str, output_path: str = "clean_thumb.jpg"
 
         # Delogo thumbnail image
         cmd = [
-            "ffmpeg", "-y", "-i", temp_raw_thumb,
+            FFMPEG_BIN or "ffmpeg", "-y", "-i", temp_raw_thumb,
             "-vf", "delogo=x=2:y=2:w=170:h=48",
             "-frames:v", "1",
             output_path
@@ -386,7 +431,7 @@ def get_video_dimensions(video_path: str):
     """Get video resolution using ffprobe."""
     try:
         cmd = [
-            "ffprobe", "-v", "error",
+            FFPROBE_BIN or "ffprobe", "-v", "error",
             "-select_streams", "v:0",
             "-show_entries", "stream=width,height",
             "-of", "csv=s=x:p=0",
@@ -398,6 +443,23 @@ def get_video_dimensions(video_path: str):
     except Exception as e:
         print(f"[WARN] ffprobe failed: {e}, falling back to 1080p")
         return 1920, 1080
+
+
+def get_video_duration(video_path: str) -> float:
+    """Get video duration in seconds using ffprobe."""
+    try:
+        cmd = [
+            FFPROBE_BIN or "ffprobe", "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            video_path
+        ]
+        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT).decode().strip()
+        dur = float(out)
+        return dur if dur > 0 else 1440.0
+    except Exception as e:
+        print(f"[WARN] ffprobe duration failed: {e}, falling back to 1440s")
+        return 1440.0
 
 
 def get_delogo_filter(height: int) -> str:
@@ -459,22 +521,24 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
     edit_telegram_message(
         bot_token, chat_id, loading_msg_id,
         f"⏳ <b>Processing Best HD Video...</b>\n\n"
-        f"<code>{make_progress_bar(10)}</code>\n"
+        f"<code>{make_progress_bar(0.0)}</code>\n\n"
         f"📌 <b>Title:</b> <code>{display_title}</code>\n"
-        f"<i>Status: Connecting & extracting streams...</i>"
+        f"<i>Status: Connecting & resolving video streams...</i>"
     )
 
     try:
-        # 2. Download Stream with yt-dlp line-by-line progress monitoring
+        # 2. Download Stream with yt-dlp line-by-line granular progress monitoring
         print(f"[*] Downloading stream with yt-dlp...")
         send_telegram_chat_action(bot_token, chat_id, "record_video")
 
+        ffmpeg_dir = os.path.dirname(FFMPEG_BIN) if (FFMPEG_BIN and os.path.isabs(FFMPEG_BIN)) else ""
         dl_cmd = [
             sys.executable, "-m", "yt_dlp",
             "-f", "bestvideo+bestaudio/best",
             "--no-playlist",
             "--no-warnings",
             "--newline",
+            *(["--ffmpeg-location", ffmpeg_dir] if ffmpeg_dir else []),
             "--write-sub", "--sub-lang", "id,en-auto",
             "-o", f"{prefix}_video.%(ext)s",
             "-o", f"subtitle:{prefix}_sub.%(ext)s",
@@ -482,25 +546,26 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
         ]
 
         proc = subprocess.Popen(dl_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-        last_progress_time = time.time()
+        last_progress_time = 0.0
 
         for line in iter(proc.stdout.readline, ''):
             m = re.search(r'\[download\]\s+([\d\.]+)%\s+of\s+~?([^\s]+)\s+at\s+([^\s]+)\s+ETA\s+([^\s]+)', line)
-            if m and time.time() - last_progress_time > 3.5:
+            if m:
                 pct = float(m.group(1))
-                size_str = m.group(2)
-                spd_str = m.group(3)
-                eta_str = m.group(4)
-                overall_pct = int(10 + (pct * 0.5))  # Map download to 10% - 60%
-                edit_telegram_message(
-                    bot_token, chat_id, loading_msg_id,
-                    f"📥 <b>Downloading Best HD Stream ({int(pct)}%)...</b>\n\n"
-                    f"<code>{make_progress_bar(overall_pct)}</code>\n"
-                    f"📊 <b>Size:</b> ~{size_str} | <b>Speed:</b> {spd_str} | <b>ETA:</b> {eta_str}\n\n"
-                    f"<i>Next: Watermark removal via FFmpeg...</i>"
-                )
-                send_telegram_chat_action(bot_token, chat_id, "record_video")
-                last_progress_time = time.time()
+                now = time.time()
+                if now - last_progress_time >= 1.5 or pct >= 100.0:
+                    size_str = m.group(2)
+                    spd_str = m.group(3)
+                    eta_str = m.group(4)
+                    edit_telegram_message(
+                        bot_token, chat_id, loading_msg_id,
+                        f"📥 <b>Downloading Stream: {pct:.1f}%</b>\n\n"
+                        f"<code>{make_progress_bar(pct)}</code>\n\n"
+                        f"📊 <b>Size:</b> ~{size_str} | <b>Speed:</b> {spd_str} | <b>ETA:</b> {eta_str}\n"
+                        f"<i>Stage 1/3: Direct Stream Download</i>"
+                    )
+                    send_telegram_chat_action(bot_token, chat_id, "record_video")
+                    last_progress_time = now
 
         proc.stdout.close()
         retcode = proc.wait()
@@ -511,6 +576,7 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
                 sys.executable, "-m", "yt_dlp",
                 "-f", "bestvideo+bestaudio/best",
                 "--no-playlist",
+                *(["--ffmpeg-location", ffmpeg_dir] if ffmpeg_dir else []),
                 "-o", f"{prefix}_video.%(ext)s",
                 video_url
             ]
@@ -523,17 +589,18 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
         if not downloaded_files:
             raise FileNotFoundError("Video stream download failed: no media files found.")
 
-        # 3. Delogo re-encoding stage
+        # 3. Delogo re-encoding stage with live progress
         primary_video = downloaded_files[0]
         w, h = get_video_dimensions(primary_video)
+        total_duration = get_video_duration(primary_video)
         delogo_vf = get_delogo_filter(h)
 
         edit_telegram_message(
             bot_token, chat_id, loading_msg_id,
-            f"⚙️ <b>Removing Watermark (FFmpeg)...</b>\n\n"
-            f"<code>{make_progress_bar(70)}</code>\n"
+            f"⚙️ <b>Removing Watermark: 0.0%</b>\n\n"
+            f"<code>{make_progress_bar(0.0)}</code>\n\n"
             f"🎬 <b>Resolution:</b> {w}x{h} ({h}p)\n"
-            f"<i>Re-encoding frames & removing top-left watermark...</i>"
+            f"<i>Stage 2/3: Frame Delogo & Audio Sync</i>"
         )
         send_telegram_chat_action(bot_token, chat_id, "record_video")
 
@@ -542,19 +609,48 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
             input_args.extend(["-i", f])
 
         ffmpeg_cmd = [
-            "ffmpeg", "-y",
+            FFMPEG_BIN or "ffmpeg", "-y",
             *input_args,
             "-vf", delogo_vf,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "copy",
+            "-progress", "pipe:1",
+            "-nostats",
             clean_video
         ]
-        ff_res = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
-        if ff_res.returncode != 0:
-            raise RuntimeError(f"FFmpeg error: {ff_res.stderr[-300:]}")
 
-        if not os.path.exists(clean_video):
-            raise FileNotFoundError("Clean video output file was not generated.")
+        ff_proc = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        last_ff_time = 0.0
+        ff_speed = "1.0x"
+
+        for ff_line in iter(ff_proc.stdout.readline, ''):
+            ff_line = ff_line.strip()
+            if ff_line.startswith("speed="):
+                ff_speed = ff_line.split("=", 1)[1].strip()
+            elif ff_line.startswith("out_time_us="):
+                try:
+                    time_us = int(ff_line.split("=", 1)[1])
+                    current_sec = time_us / 1000000.0
+                    ff_pct = min(99.9, (current_sec / max(1.0, total_duration)) * 100.0)
+                    now = time.time()
+                    if now - last_ff_time >= 1.5:
+                        edit_telegram_message(
+                            bot_token, chat_id, loading_msg_id,
+                            f"⚙️ <b>Removing Watermark: {ff_pct:.1f}%</b>\n\n"
+                            f"<code>{make_progress_bar(ff_pct)}</code>\n\n"
+                            f"🎬 <b>Resolution:</b> {w}x{h} ({h}p) | <b>Speed:</b> {ff_speed}\n"
+                            f"<i>Stage 2/3: Frame Delogo & Audio Sync</i>"
+                        )
+                        send_telegram_chat_action(bot_token, chat_id, "record_video")
+                        last_ff_time = now
+                except Exception:
+                    pass
+
+        ff_proc.stdout.close()
+        ff_ret = ff_proc.wait()
+        if ff_ret != 0 or not os.path.exists(clean_video):
+            err_stderr = ff_proc.stderr.read() if ff_proc.stderr else ""
+            raise RuntimeError(f"FFmpeg error (exit code {ff_ret}): {err_stderr[-300:]}")
 
         files_to_upload.append(clean_video)
         final_video_size = os.path.getsize(clean_video)
@@ -573,8 +669,9 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
         edit_telegram_message(
             bot_token, chat_id, loading_msg_id,
             f"☁️ <b>Uploading Clean Video ({file_size_str})...</b>\n\n"
-            f"<code>{make_progress_bar(90)}</code>\n"
-            f"📦 <b>Uploading to high-speed GitHub CDN...</b>"
+            f"<code>{make_progress_bar(99.0)}</code>\n\n"
+            f"📦 <b>Uploading to high-speed GitHub CDN...</b>\n"
+            f"<i>Stage 3/3: Publishing Direct Download Link</i>"
         )
         send_telegram_chat_action(bot_token, chat_id, "upload_document")
 
@@ -613,7 +710,7 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
         # 7. Final Success State
         success_msg = (
             f"✅ <b>Clean Video Ready!</b>\n\n"
-            f"<code>{make_progress_bar(100)}</code>\n\n"
+            f"<code>{make_progress_bar(100.0)}</code>\n\n"
             f"📌 <b>Title:</b>\n<code>{display_title}</code>\n\n"
             f"📦 <b>File Size:</b> {file_size_str}\n"
             f"🎬 <b>Quality:</b> Best HD ({h}p) + Audio\n\n"
@@ -723,7 +820,7 @@ def process_user_commands(bot_token: str, direct_url: str = "", custom_msg_id: i
             else:
                 loading_id = send_telegram(
                     bot_token, chat_id,
-                    f"⏳ <b>Processing Best HD Video...</b>\n\n<code>{make_progress_bar(10)}</code>\nDownloading and removing watermark..."
+                    f"⏳ <b>Processing Best HD Video...</b>\n\n<code>{make_progress_bar(0.0)}</code>\n<i>Connecting & resolving video streams...</i>"
                 )
             download_and_clean(direct_url, bot_token, chat_id, loading_id)
         return
@@ -795,7 +892,7 @@ def process_user_commands(bot_token: str, direct_url: str = "", custom_msg_id: i
 
             loading_id = send_telegram(
                 bot_token, chat_id,
-                f"⏳ <b>Processing Best HD Video...</b>\n\n<code>{make_progress_bar(10)}</code>\nDownloading and removing watermark..."
+                f"⏳ <b>Processing Best HD Video...</b>\n\n<code>{make_progress_bar(0.0)}</code>\n<i>Connecting & resolving video streams...</i>"
             )
             download_and_clean(target_link, bot_token, chat_id, loading_id)
 
