@@ -9,9 +9,10 @@ Features:
    - Clean Episode Title
    - 1-Tap copyable direct link (no /dl prefix, link alone)
 3. Commands:
-   - /last or /link : Retrieve the latest episode with 16:9 thumbnail and direct link
-   - /dl <link>     : Download Best HD video + Audio + Subtitle with watermark removed
-   - /start         : Bot overview & instructions
+   - /last           : Retrieve the latest published episode with 16:9 thumbnail and direct link
+   - /link <page_url>: Convert an AnimeKhor webpage URL to a direct Dailymotion link + 16:9 thumbnail
+   - /dl <link>      : Download Best HD video + Audio + Subtitle with watermark removed
+   - /start          : Bot overview & instructions
 4. Cloud Processing:
    - Always downloads the Best HD quality available (1080p).
    - Automatically removes AnimeKhor.org watermark using FFmpeg delogo.
@@ -272,7 +273,7 @@ def register_commands(bot_token: str):
     payload = json.dumps({
         "commands": [
             {"command": "last", "description": "Get latest episode & 16:9 thumbnail"},
-            {"command": "link", "description": "Get latest episode & 16:9 thumbnail"},
+            {"command": "link", "description": "Convert webpage URL to direct video link"},
             {"command": "dl", "description": "Download clean Best HD video + subtitle"},
             {"command": "start", "description": "Bot overview & instructions"}
         ]
@@ -586,7 +587,7 @@ def process_user_commands(bot_token: str, direct_url: str = ""):
 
         print(f"[USER] Command from {chat_id}: {text}")
 
-        # Download command: /dl <link> or /dl (for latest)
+        # 1. /dl <link> : Download & remove watermark
         if text.startswith("/dl"):
             delete_telegram_message(bot_token, chat_id, user_msg_id)
 
@@ -615,8 +616,8 @@ def process_user_commands(bot_token: str, direct_url: str = ""):
             )
             download_and_clean(target_link, bot_token, chat_id, loading_id)
 
-        # /last or /link commands: Get latest episode with 16:9 thumbnail
-        elif text.startswith("/last") or text.startswith("/link"):
+        # 2. /last : Get latest episode from RSS feed
+        elif text.startswith("/last"):
             latest = get_latest_rss_item()
             if latest:
                 video_url = extract_video_link(latest["link"])
@@ -626,6 +627,35 @@ def process_user_commands(bot_token: str, direct_url: str = ""):
             else:
                 send_telegram(bot_token, chat_id, "❌ Failed to fetch latest episode.")
 
+        # 3. /link <page_url> : Convert AnimeKhor webpage to direct video link
+        elif text.startswith("/link"):
+            parts = text.split(maxsplit=1)
+            target_page = ""
+            if len(parts) > 1:
+                target_page = parts[1].strip()
+            elif "reply_to_message" in msg and "text" in msg["reply_to_message"]:
+                rep_text = msg["reply_to_message"]["text"]
+                match = re.search(r'https?://[^\s<>"]+', rep_text)
+                if match:
+                    target_page = match.group(0)
+
+            if not target_page:
+                send_telegram(bot_token, chat_id, "❌ <b>Usage:</b> <code>/link &lt;animekhor-page-url&gt;</code>")
+                continue
+
+            video_url = extract_video_link(target_page)
+            thumb_url = get_dailymotion_thumbnail(video_url)
+            page_slug = target_page.rstrip("/").split("/")[-1].replace("-", " ").title()
+            reply = (
+                f"🎬 <b>Direct Video Link Ready!</b>\n\n"
+                f"📌 <b>Page:</b>\n<code>{page_slug}</code>\n\n"
+                f"🔗 <b>Direct Link:</b>\n<code>{video_url}</code>"
+            )
+            if thumb_url:
+                reply += f"\n\n🖼️ <b>16:9 Thumbnail (1080p):</b>\n<a href=\"{thumb_url}\">Open / Save 16:9 Thumbnail</a>"
+            send_telegram_photo(bot_token, chat_id, thumb_url, reply)
+
+        # 4. /start or /help : Bot instructions
         elif text.startswith("/start") or text.startswith("/help"):
             welcome = (
                 "👋 <b>AnimeKhor Notifier & Best HD Downloader</b>\n\n"
@@ -633,8 +663,9 @@ def process_user_commands(bot_token: str, direct_url: str = ""):
                 "• Tap any link to copy it instantly\n"
                 "• 16:9 HD Thumbnail included with each episode for YouTube\n\n"
                 "<b>Commands:</b>\n"
-                "• /last or /link - Get latest episode and 16:9 thumbnail\n"
-                "• /dl - Download latest episode in Best HD (Watermark removed + Subtitle)\n"
+                "• /last - Check latest episode from AnimeKhor\n"
+                "• /link &lt;page-url&gt; - Convert webpage URL to direct video link\n"
+                "• /dl - Download latest episode in Best HD (Watermark removed)\n"
                 "• /dl &lt;link&gt; - Download specific video in Best HD"
             )
             send_telegram(bot_token, chat_id, welcome)

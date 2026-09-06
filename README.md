@@ -4,22 +4,13 @@ Automated pipeline for AnimeKhor episode notifications, 16:9 thumbnail extractio
 
 ---
 
-## 📱 Features
+## 📱 Commands
 
-* **Automated 24/7 Notifications**:
-  Monitors AnimeKhor updates and delivers clean Telegram alerts containing:
-  * 🖼️ **16:9 Full HD Thumbnail** (embedded preview + direct 1080p link for your YouTube thumbnails).
-  * 📌 Clean Episode Title.
-  * 🔗 Direct Dailymotion Link (tap the code block to copy the link alone).
-* **Best HD Cloud Processing (`/dl`)**:
-  * Automatically downloads the **Best HD quality available (1080p) + Audio**.
-  * Removes the top-left `AnimeKhor.org` watermark cleanly with FFmpeg `delogo`.
-  * Extracts and cleans Indonesian (`.id.srt`) & English (`.en.srt`) subtitles (watermark promo lines stripped).
-  * Displays the exact **final file size** and video quality.
-  * Uploads to **GitHub Releases CDN** for direct, high-speed downloads without Telegram's 50MB file size limit.
-  * Edits the processing message in-place and includes a `🗑️ Dismiss / Close` button.
-* **On-Demand Check (`/last` or `/link`)**:
-  * Retrieve the latest published episode with its 16:9 thumbnail and direct link on demand.
+* `/last` : Retrieve the latest episode from AnimeKhor with its 16:9 thumbnail and direct link.
+* `/link <page-url>` : Convert an AnimeKhor webpage URL to a clean Dailymotion video link + 16:9 thumbnail.
+* `/dl` : Download the latest episode in Best HD (1080p + Audio + Subtitle with watermark removed).
+* `/dl <link>` : Download a specific episode in Best HD with watermark removed.
+* `/start` : Bot overview and command guide.
 
 ---
 
@@ -31,12 +22,8 @@ In this repository, navigate to **Settings** > **Secrets and variables** > **Act
 
 ---
 
-## 🚀 How to Use
+## 🚀 Usage Guide
 
-1. **Copy Link:**
-   * Tap the direct link in the notification to copy it immediately.
-2. **Download Best HD Video:**
-   * Send `/dl` to download the latest episode in Best HD.
-   * Or send `/dl <link>` to download a specific video.
-3. **Get Clean Files:**
-   * The bot updates with the clean 1080p MP4 and subtitle `.srt` download links along with the actual file size.
+1. **Get Latest Episode:** Send `/last` to fetch the newest episode and 16:9 Full HD thumbnail.
+2. **Convert Any Page:** Send `/link https://animekhor.org/...` to convert a webpage to a direct video link.
+3. **Cloud Download (No WM):** Send `/dl` or `/dl <video-link>` to generate a watermark-free 1080p MP4 and clean `.srt` subtitles.
