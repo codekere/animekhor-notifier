@@ -1,6 +1,8 @@
 name: Anime Episode Notifier
 
 on:
+  push:
+    branches: [ "main" ]
   schedule:
     # Berjalan otomatis setiap 15 menit
     - cron: '*/15 * * * *'

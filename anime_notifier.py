@@ -351,6 +351,24 @@ def process_telegram_commands(bot_token: str, gemini_key: str):
     save_json(BOT_OFFSET_FILE, last_offset)
 
 
+def register_bot_commands(bot_token: str):
+    """Mendaftarkan daftar command ke Telegram agar muncul saat user ketik '/'."""
+    url = f"https://api.telegram.org/bot{bot_token}/setMyCommands"
+    commands = [
+        {"command": "start", "description": "Mulai bot & lihat panduan"},
+        {"command": "cari", "description": "Cari judul anime (contoh: /cari apotheosis)"},
+        {"command": "download", "description": "Ekstrak link video dari web"},
+        {"command": "help", "description": "Bantuan penggunaan"}
+    ]
+    payload = json.dumps({"commands": commands}).encode('utf-8')
+    req = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        print("[OK] Menu perintah Telegram ('/') berhasil didaftarkan!")
+    except Exception as e:
+        print(f"[WARN] Gagal mendaftarkan menu perintah: {e}")
+
+
 def main():
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
@@ -359,6 +377,9 @@ def main():
     if not bot_token or not chat_id:
         print("[ERROR] TELEGRAM_BOT_TOKEN dan TELEGRAM_CHAT_ID belum diatur!")
         sys.exit(1)
+
+    # Otomatis daftarkan tombol '/' di Telegram
+    register_bot_commands(bot_token)
 
     # Cek mode polling bot atau notify biasa
     if "--bot" in sys.argv:
