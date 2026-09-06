@@ -155,10 +155,10 @@ def clean_title_for_display(raw_title: str) -> str:
 
 
 def sanitize_filename(name: str, ext: str = "mp4") -> str:
-    """Generate safe filename."""
+    """Generate safe, URL-friendly filename 100% compatible with GitHub Releases."""
     cleaned = clean_title_for_display(name)
-    cleaned = re.sub(r'[\\/*?:"<>|]', "", cleaned)
-    cleaned = re.sub(r'\s+', "_", cleaned.strip())
+    cleaned = re.sub(r'[^a-zA-Z0-9_\-]', "_", cleaned)
+    cleaned = re.sub(r'_+', "_", cleaned.strip("_"))
     return f"{cleaned[:50]}_Clean.{ext}"
 
 
@@ -534,7 +534,9 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
         ffmpeg_dir = os.path.dirname(FFMPEG_BIN) if (FFMPEG_BIN and os.path.isabs(FFMPEG_BIN)) else ""
         dl_cmd = [
             sys.executable, "-m", "yt_dlp",
-            "-f", "bestvideo+bestaudio/best",
+            "--impersonate", "chrome",
+            "-S", "res:1080,res:720,vcodec:h264,vcodec:av01",
+            "-f", "bestvideo[height>=1080]+bestaudio/bestvideo[height>=720]+bestaudio/bestvideo+bestaudio/best",
             "--no-playlist",
             "--no-warnings",
             "--newline",
@@ -574,7 +576,9 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
             print(f"[WARN] Initial yt-dlp failed, retrying without subtitles...")
             dl_retry = [
                 sys.executable, "-m", "yt_dlp",
-                "-f", "bestvideo+bestaudio/best",
+                "--impersonate", "chrome",
+                "-S", "res:1080,res:720,vcodec:h264,vcodec:av01",
+                "-f", "bestvideo[height>=1080]+bestaudio/bestvideo[height>=720]+bestaudio/bestvideo+bestaudio/best",
                 "--no-playlist",
                 *(["--ffmpeg-location", ffmpeg_dir] if ffmpeg_dir else []),
                 "-o", f"{prefix}_video.%(ext)s",
@@ -592,6 +596,24 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
         # 3. Delogo re-encoding stage with live progress
         primary_video = downloaded_files[0]
         w, h = get_video_dimensions(primary_video)
+        if h < 720:
+            print(f"[WARN] Initial resolution is {w}x{h} (< 720p). Retrying with forced 1080p format...")
+            dl_force = [
+                sys.executable, "-m", "yt_dlp",
+                "--impersonate", "chrome",
+                "-f", "hls-1080-0+hls-0_aac_q2-_original_/hls-1080-1+hls-0_aac_q2-_original_/hls-720+hls-0_aac_q2-_original_/bestvideo+bestaudio/best",
+                "--no-playlist",
+                *(["--ffmpeg-location", ffmpeg_dir] if ffmpeg_dir else []),
+                "-o", f"{prefix}_video.%(ext)s",
+                video_url
+            ]
+            subprocess.run(dl_force, capture_output=True, text=True)
+            new_files = [f for f in glob.glob(f"{prefix}_video*") if not f.endswith(".ytdl") and not f.endswith(".part")]
+            if new_files:
+                primary_video = new_files[0]
+                downloaded_files = new_files
+                w, h = get_video_dimensions(primary_video)
+
         total_duration = get_video_duration(primary_video)
         delogo_vf = get_delogo_filter(h)
 
@@ -613,7 +635,7 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
             *input_args,
             "-vf", delogo_vf,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-            "-c:a", "copy",
+            "-c:a", "aac", "-b:a", "192k",
             "-progress", "pipe:1",
             "-nostats",
             clean_video
@@ -687,13 +709,34 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
         subprocess.run(gh_cmd, check=True)
 
         base_dl_url = f"https://github.com/{repo}/releases/download/{tag}"
+        release_page_url = f"https://github.com/{repo}/releases/tag/{tag}"
         video_download_url = f"{base_dl_url}/{urllib.parse.quote(clean_video)}"
         sub_links = []
-        for f in files_to_upload:
-            if f.endswith(".srt"):
-                lang_tag = "Indonesian" if "_ID_" in f else "English"
-                sub_url = f"{base_dl_url}/{urllib.parse.quote(f)}"
-                sub_links.append(f"• <a href=\"{sub_url}\"><b>Download Subtitle ({lang_tag} .SRT)</b></a>")
+
+        # Retrieve exact asset URLs from GitHub CLI view
+        try:
+            gh_view = subprocess.check_output(
+                ["gh", "release", "view", tag, "--json", "assets,url"],
+                stderr=subprocess.DEVNULL
+            ).decode()
+            rel_info = json.loads(gh_view)
+            if rel_info.get("url"):
+                release_page_url = rel_info["url"]
+            for asset in rel_info.get("assets", []):
+                aname = asset.get("name", "")
+                adl = asset.get("browser_download_url", "")
+                if aname.endswith(".mp4"):
+                    video_download_url = adl
+                elif aname.endswith(".srt"):
+                    lang_tag = "Indonesian" if "_ID_" in aname else "English"
+                    sub_links.append(f"• <a href=\"{adl}\"><b>Subtitle ({lang_tag} .SRT)</b></a>")
+        except Exception as e:
+            print(f"[WARN] Failed to read release view: {e}")
+            for f in files_to_upload:
+                if f.endswith(".srt"):
+                    lang_tag = "Indonesian" if "_ID_" in f else "English"
+                    sub_url = f"{base_dl_url}/{urllib.parse.quote(f)}"
+                    sub_links.append(f"• <a href=\"{sub_url}\"><b>Subtitle ({lang_tag} .SRT)</b></a>")
 
         subs_section = "\n".join(sub_links) if sub_links else "• <i>Subtitles embedded in stream</i>"
 
@@ -713,10 +756,11 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
             f"<code>{make_progress_bar(100.0)}</code>\n\n"
             f"📌 <b>Title:</b>\n<code>{display_title}</code>\n\n"
             f"📦 <b>File Size:</b> {file_size_str}\n"
-            f"🎬 <b>Quality:</b> Best HD ({h}p) + Audio\n\n"
-            f"⬇️ <a href=\"{video_download_url}\"><b>[ DOWNLOAD CLEAN MP4 ]</b></a>\n\n"
+            f"🎬 <b>Quality:</b> Best HD ({h}p Full HD) + AAC Audio\n\n"
+            f"⬇️ <a href=\"{video_download_url}\"><b>[ ⬇️ DOWNLOAD CLEAN MP4 ]</b></a>\n"
+            f"📦 <a href=\"{release_page_url}\"><b>[ 🌐 Halaman Rilis GitHub & Semua File ]</b></a>\n\n"
             f"<b>Subtitles:</b>\n{subs_section}\n\n"
-            f"<i>ℹ️ Direct high-speed download from GitHub CDN.</i>"
+            f"💡 <i>Tip: Jika link unduhan tidak otomatis terdownload di HP, tahan link lalu pilih <b>'Buka di Browser / Chrome'</b> atau unduh langsung melalui Halaman Rilis GitHub.</i>"
         )
         edit_telegram_message(bot_token, chat_id, loading_msg_id, success_msg, reply_markup=DISMISS_KEYBOARD)
         print(f"[OK] Successfully processed and released {display_title} ({file_size_str})")
