@@ -1,50 +1,41 @@
 # AnimeKhor Notifier & Best HD Downloader
 
-Automated pipeline for AnimeKhor episode notifications, 16:9 thumbnail extraction for YouTube, and cloud watermark-free video downloads via **GitHub Actions** and **Telegram Bot**.
-
----
-
-## ⚡ Instant Response via Cloudflare Worker
-
-To have your Telegram bot reply **instantly (sub-second)** to `/last`, `/link`, and `/dl`:
-
-1. Go to your [Cloudflare Dashboard](https://dash.cloudflare.com/) > **Workers & Pages** > **Create application** > **Create Worker**.
-2. Name it (e.g. `animekhor-bot`), click **Deploy**, then click **Edit code**.
-3. Replace the code with the contents of [`cloudflare_worker.js`](file:///c:/Users/User/Desktop/Downloader/cloudflare_worker.js) and click **Deploy**.
-4. Go to **Settings** > **Variables and Secrets** of the Worker and add:
-   * `TELEGRAM_BOT_TOKEN` : Your bot token from [@BotFather](https://t.me/BotFather)
-   * `TELEGRAM_CHAT_ID` : (Optional) Your numeric Chat ID to restrict access
-   * `GITHUB_TOKEN` : A GitHub Personal Access Token (Classic PAT with `repo` scope from [GitHub Tokens](https://github.com/settings/tokens))
-   * `GITHUB_REPO` : `codekere/animekhor-notifier`
-5. Set the Telegram Webhook:
-   Open your browser and visit:
-   ```text
-   https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://<YOUR_WORKER_SUBDOMAIN>.workers.dev
-   ```
-   *(Replace `<YOUR_BOT_TOKEN>` and your Worker URL)*.
-   Once set, all `/last`, `/link`, and `/dl` commands will reply in **under 1 second**!
+Automated pipeline for AnimeKhor episode notifications, 16:9 thumbnail extraction for YouTube, and cloud watermark-free video downloads with live progress bars via **GitHub Actions**, **Cloudflare Workers**, and **Telegram Bot**.
 
 ---
 
 ## 📱 Bot Commands
 
-* `/last` : Retrieve the latest episode from AnimeKhor with clean 16:9 thumbnail and direct link.
-* `/link <page-url>` : Convert an AnimeKhor webpage URL to a clean Dailymotion video link + 16:9 thumbnail (defaults to latest if no URL provided).
-* `/dl` : Download the latest episode in Best HD (1080p + Audio + Subtitle with watermark removed).
-* `/dl <link>` : Download a specific episode in Best HD with watermark removed.
+* `/link` : Retrieve the latest episode with clean 16:9 thumbnail, release date (WIB), and direct link.
+* `/link <page-url>` : Convert an AnimeKhor webpage URL to a clean Dailymotion video link.
+* `/dl` : Download the latest episode in Best HD with live progress bar (Watermark removed + Subtitle).
+* `/dl <link>` : Download a specific video in Best HD with watermark removed.
 * `/start` : Bot overview and command guide.
 
 ---
 
-## ⚙️ GitHub Secrets Configuration
+## ⚡ Instant Responses via Cloudflare Workers
 
-In this repository, navigate to **Settings** > **Secrets and variables** > **Actions**:
-* `TELEGRAM_BOT_TOKEN` : Bot token from [@BotFather](https://t.me/BotFather)
-* `TELEGRAM_CHAT_ID` : Your numeric Chat ID from [@userinfobot](https://t.me/userinfobot)
+The bot responds in **under 1 second** by routing incoming Telegram webhooks through Cloudflare Workers, while heavy video rendering (FFmpeg delogo) runs on GitHub Actions runners:
+
+1. Copy the code in [`cloudflare_worker.js`](file:///c:/Users/User/Desktop/Downloader/cloudflare_worker.js) into your Cloudflare Worker.
+2. In Worker **Settings** > **Variables and Secrets**, configure:
+   * `TELEGRAM_BOT_TOKEN` : Bot token from [@BotFather](https://t.me/BotFather)
+   * `TELEGRAM_CHAT_ID` : (Optional) Your numeric Chat ID to restrict access
+   * `GITHUB_TOKEN` : GitHub Personal Access Token (Classic PAT with `repo` scope)
+   * `GITHUB_REPO` : `codekere/animekhor-notifier`
+3. Set Webhook:
+   ```text
+   https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://<YOUR_WORKER>.workers.dev
+   ```
 
 ---
 
-## 🧹 Automatic Storage & Log Cleanup
+## 📊 Live Download Progress
 
-* **GitHub Actions Runners**: Fully ephemeral. Every job runs in an isolated virtual machine; all temporary videos and logs are destroyed upon job completion.
-* **GitHub Releases CDN**: Automatically pruned to keep only the newest 3 releases, preventing repository storage accumulation.
+During `/dl`, the bot displays an animated progress bar in Telegram:
+* `10%` : Connecting & extracting media streams.
+* `10% - 60%` : Live stream download progress (Size, Speed, ETA).
+* `70%` : Removing watermark via FFmpeg delogo.
+* `90%` : Uploading clean assets to GitHub Releases CDN.
+* `100%` : Clean MP4 & subtitle ready for download.

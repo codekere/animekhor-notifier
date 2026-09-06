@@ -2,9 +2,8 @@
  * Cloudflare Worker for AnimeKhor Telegram Bot
  * ============================================
  * Provides instant (< 1 second) responses for Telegram commands:
- * - /last : Instant latest episode with 16:9 thumbnail and direct link
- * - /link <page_url> : Instant webpage to video link conversion
- * - /dl <link> : Immediate loading reply, triggers GitHub Actions for Best HD cloud rendering
+ * - /link [page_url] : Instant latest episode or webpage to video link conversion
+ * - /dl [link]       : Immediate progress bar reply, triggers GitHub Actions for Best HD cloud rendering
  *
  * Environment Variables required in Cloudflare Worker:
  * - TELEGRAM_BOT_TOKEN : Telegram bot token from @BotFather
@@ -64,42 +63,17 @@ async function handleTelegramUpdate(update, env) {
       `👋 <b>AnimeKhor Notifier & Cloud Processor</b>\n\n` +
       `<b>Features:</b>\n` +
       `• Instant sub-second responses via Cloudflare Workers\n` +
-      `• 16:9 Full HD Thumbnails for YouTube\n\n` +
+      `• Watermark-free 16:9 Full HD Thumbnails for YouTube\n` +
+      `• Live progress bar during cloud video processing\n\n` +
       `<b>Commands:</b>\n` +
-      `• /last - Check latest episode from AnimeKhor\n` +
-      `• /link &lt;page-url&gt; - Convert webpage URL to direct video link\n` +
+      `• /link - Get latest episode direct link or convert page URL\n` +
       `• /dl - Download latest episode in Best HD (Watermark removed)\n` +
       `• /dl &lt;link&gt; - Download specific video in Best HD`;
     await sendTelegram(botToken, chatId, welcome);
     return;
   }
 
-  // 3. Command: /last (Fetch latest episode instantly)
-  if (text.startsWith("/last")) {
-    const latest = await getLatestRssItem();
-    if (!latest) {
-      await sendTelegram(botToken, chatId, "❌ Failed to fetch latest episode.");
-      return;
-    }
-
-    const videoUrl = await extractVideoLink(latest.link);
-    const thumbUrl = await getDailymotionThumbnail(videoUrl);
-    const cleanTitle = cleanTitleForDisplay(latest.title);
-
-    const caption =
-      `🎬 <b>Latest Episode:</b>\n\n` +
-      `📌 <b>Title:</b>\n<code>${cleanTitle}</code>\n\n` +
-      `🔗 <b>Direct Link:</b>\n<code>${videoUrl}</code>`;
-
-    if (thumbUrl) {
-      await sendTelegramPhoto(botToken, chatId, thumbUrl, caption);
-    } else {
-      await sendTelegram(botToken, chatId, caption);
-    }
-    return;
-  }
-
-  // 4. Command: /link <page_url> (Convert AnimeKhor page instantly)
+  // 3. Command: /link [page_url] (Latest episode or convert page)
   if (text.startsWith("/link")) {
     const parts = text.split(/\s+/);
     let targetPage = parts[1] || "";
@@ -109,25 +83,32 @@ async function handleTelegramUpdate(update, env) {
       if (match) targetPage = match[0];
     }
 
-    // Default to latest episode if no link provided
+    let pubDateStr = "";
+
+    // Default to latest episode from RSS if no URL is provided
     if (!targetPage) {
       const latest = await getLatestRssItem();
-      if (latest) targetPage = latest.link;
-    }
-
-    if (!targetPage) {
-      await sendTelegram(botToken, chatId, "❌ <b>Usage:</b> <code>/link &lt;animekhor-page-url&gt;</code>");
-      return;
+      if (!latest) {
+        await sendTelegram(botToken, chatId, "❌ Failed to fetch latest episode.");
+        return;
+      }
+      targetPage = latest.link;
+      pubDateStr = latest.pubDate;
     }
 
     const videoUrl = await extractVideoLink(targetPage);
     const thumbUrl = await getDailymotionThumbnail(videoUrl);
     const pageSlug = targetPage.replace(/\/+$/, "").split("/").pop().replace(/-/g, " ");
 
-    const caption =
+    let caption =
       `🎬 <b>Direct Video Link Ready!</b>\n\n` +
-      `📌 <b>Page:</b>\n<code>${pageSlug}</code>\n\n` +
-      `🔗 <b>Direct Link:</b>\n<code>${videoUrl}</code>`;
+      `📌 <b>Page:</b>\n<code>${pageSlug}</code>\n`;
+
+    if (pubDateStr) {
+      caption += `\n🕒 <b>Update:</b> ${pubDateStr}\n`;
+    }
+
+    caption += `\n🔗 <b>Direct Link:</b>\n<code>${videoUrl}</code>`;
 
     if (thumbUrl) {
       await sendTelegramPhoto(botToken, chatId, thumbUrl, caption);
@@ -137,7 +118,7 @@ async function handleTelegramUpdate(update, env) {
     return;
   }
 
-  // 5. Command: /dl (Trigger cloud watermark removal)
+  // 4. Command: /dl (Trigger cloud watermark removal with live progress bar)
   if (text.startsWith("/dl")) {
     await deleteTelegramMessage(botToken, chatId, userMsgId);
 
@@ -159,11 +140,13 @@ async function handleTelegramUpdate(update, env) {
       return;
     }
 
-    // Send immediate loading message
+    // Send immediate live progress bar message (10%)
     const loadingRes = await sendTelegram(
       botToken,
       chatId,
-      "⏳ <b>Processing Best HD Video...</b>\nStarting GitHub Actions runner to download and remove watermark. Please wait ~2-3 minutes..."
+      `⏳ <b>Processing Best HD Video...</b>\n\n` +
+      `<code>[■□□□□□□□□□] 10%</code>\n` +
+      `Starting GitHub Actions cloud runner to download and remove watermark...`
     );
 
     const loadingMsgId = loadingRes ? loadingRes.message_id : 0;
@@ -200,6 +183,25 @@ async function triggerGitHubWorkflow(token, repo, url, chatId, messageId) {
   });
 }
 
+function formatPubDate(pubDateStr) {
+  if (!pubDateStr) return "";
+  try {
+    const d = new Date(pubDateStr);
+    // Convert to WIB (UTC+7)
+    const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+    const wib = new Date(utc + (3600000 * 7));
+    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    const day = String(wib.getDate()).padStart(2, "0");
+    const month = months[wib.getMonth()];
+    const year = wib.getFullYear();
+    const hours = String(wib.getHours()).padStart(2, "0");
+    const mins = String(wib.getMinutes()).padStart(2, "0");
+    return `${day} ${month} ${year}, ${hours}:${mins} WIB`;
+  } catch (e) {
+    return pubDateStr;
+  }
+}
+
 async function getLatestRssItem() {
   try {
     const res = await fetch("https://animekhor.org/feed/", {
@@ -211,10 +213,12 @@ async function getLatestRssItem() {
 
     const titleMatch = itemMatch[1].match(/<title>([\s\S]*?)<\/title>/);
     const linkMatch = itemMatch[1].match(/<link>([\s\S]*?)<\/link>/);
+    const pubDateMatch = itemMatch[1].match(/<pubDate>([\s\S]*?)<\/pubDate>/);
 
     return {
       title: titleMatch ? titleMatch[1].replace(/<!\[CDATA\[(.*?)\]\]>/g, "$1").trim() : "",
-      link: linkMatch ? linkMatch[1].trim() : ""
+      link: linkMatch ? linkMatch[1].trim() : "",
+      pubDate: pubDateMatch ? formatPubDate(pubDateMatch[1].trim()) : ""
     };
   } catch (e) {
     return null;
