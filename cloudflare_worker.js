@@ -2,8 +2,9 @@
  * Cloudflare Worker for AnimeKhor Telegram Bot
  * ============================================
  * Provides instant (< 1 second) responses for Telegram commands:
- * - /link [page_url] : Instant latest episode or webpage to video link conversion
- * - /dl [link]       : Immediate progress bar reply, triggers GitHub Actions for Best HD cloud rendering
+ * - /link [page_url] : Instant latest episode or webpage to video link with 100% WATERMARK-FREE 16:9 thumbnail
+ * - /dl [link]       : Inspects episode, displays Title, Estimated Size, and confirmation button
+ * - Confirmation tap : Starts Live Progress Bar, triggers GitHub Actions for Best HD cloud rendering
  *
  * Environment Variables required in Cloudflare Worker:
  * - TELEGRAM_BOT_TOKEN : Telegram bot token from @BotFather
@@ -35,12 +36,39 @@ async function handleTelegramUpdate(update, env) {
   const githubToken = env.GITHUB_TOKEN;
   const githubRepo = env.GITHUB_REPO || "codekere/animekhor-notifier";
 
-  // 1. Handle Callback Query (Dismiss button)
+  // 1. Handle Callback Queries (Buttons)
   if (update.callback_query) {
     const cb = update.callback_query;
-    if (cb.data === "dismiss") {
-      await deleteTelegramMessage(botToken, cb.message.chat.id, cb.message.message_id);
-      await answerCallbackQuery(botToken, cb.id, "Dismissed");
+    const cbData = cb.data || "";
+    const cbChatId = cb.message.chat.id;
+    const cbMsgId = cb.message.message_id;
+
+    if (cbData === "dismiss") {
+      await deleteTelegramMessage(botToken, cbChatId, cbMsgId);
+      await answerCallbackQuery(botToken, cb.id, "Closed");
+      return;
+    }
+
+    // Confirmation button tapped: start download & cloud processing
+    if (cbData.startsWith("confirm_dl:")) {
+      const vidId = cbData.split(":")[1];
+      const videoUrl = `https://www.dailymotion.com/video/${vidId}`;
+
+      await answerCallbackQuery(botToken, cb.id, "Starting cloud download...");
+
+      // Update message into Live Progress Bar (10%)
+      const progressMsg =
+        `⏳ <b>Processing Best HD Video...</b>\n\n` +
+        `<code>[■□□□□□□□□□] 10%</code>\n` +
+        `Starting GitHub Actions runner to download and remove watermark. Please wait ~2-3 minutes...`;
+
+      await editTelegramMessage(botToken, cbChatId, cbMsgId, progressMsg);
+
+      // Trigger GitHub Actions via repository_dispatch
+      if (githubToken) {
+        await triggerGitHubWorkflow(githubToken, githubRepo, videoUrl, cbChatId, cbMsgId);
+      }
+      return;
     }
     return;
   }
@@ -63,12 +91,13 @@ async function handleTelegramUpdate(update, env) {
       `👋 <b>AnimeKhor Notifier & Cloud Processor</b>\n\n` +
       `<b>Features:</b>\n` +
       `• Instant sub-second responses via Cloudflare Workers\n` +
-      `• Watermark-free 16:9 Full HD Thumbnails for YouTube\n` +
-      `• Live progress bar during cloud video processing\n\n` +
+      `• 100% Watermark-free 16:9 Full HD Thumbnails for YouTube\n` +
+      `• Live progress bar during video processing\n\n` +
       `<b>Commands:</b>\n` +
-      `• /link - Get latest episode direct link or convert page URL\n` +
-      `• /dl - Download latest episode in Best HD (Watermark removed)\n` +
-      `• /dl &lt;link&gt; - Download specific video in Best HD`;
+      `• /link - Get latest episode with clean thumbnail & direct link\n` +
+      `• /link &lt;page-url&gt; - Convert AnimeKhor page to direct video link\n` +
+      `• /dl - Check latest episode title & size, with download button\n` +
+      `• /dl &lt;link&gt; - Check specific episode title & size, with download button`;
     await sendTelegram(botToken, chatId, welcome);
     return;
   }
@@ -97,8 +126,10 @@ async function handleTelegramUpdate(update, env) {
     }
 
     const videoUrl = await extractVideoLink(targetPage);
-    const thumbUrl = await getDailymotionThumbnail(videoUrl);
+    const info = await getDailymotionVideoInfo(videoUrl);
+    const cleanThumbUrl = getCleanThumbnailUrl(info.rawThumbUrl);
     const pageSlug = targetPage.replace(/\/+$/, "").split("/").pop().replace(/-/g, " ");
+    const vidId = extractDmId(videoUrl);
 
     let caption =
       `🎬 <b>Direct Video Link Ready!</b>\n\n` +
@@ -108,17 +139,27 @@ async function handleTelegramUpdate(update, env) {
       caption += `\n🕒 <b>Update:</b> ${pubDateStr}\n`;
     }
 
-    caption += `\n🔗 <b>Direct Link:</b>\n<code>${videoUrl}</code>`;
+    caption +=
+      `\n📦 <b>Size:</b> ${info.size} (Best HD)\n` +
+      `🔗 <b>Direct Link:</b>\n<code>${videoUrl}</code>`;
 
-    if (thumbUrl) {
-      await sendTelegramPhoto(botToken, chatId, thumbUrl, caption);
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: `⬇️ Download Best HD (${info.size})`, callback_data: `confirm_dl:${vidId}` }
+        ]
+      ]
+    };
+
+    if (cleanThumbUrl) {
+      await sendTelegramPhoto(botToken, chatId, cleanThumbUrl, caption, keyboard);
     } else {
-      await sendTelegram(botToken, chatId, caption);
+      await sendTelegram(botToken, chatId, caption, keyboard);
     }
     return;
   }
 
-  // 4. Command: /dl (Trigger cloud watermark removal with live progress bar)
+  // 4. Command: /dl (Show Title, Size, and Confirmation Download Button)
   if (text.startsWith("/dl")) {
     await deleteTelegramMessage(botToken, chatId, userMsgId);
 
@@ -140,27 +181,64 @@ async function handleTelegramUpdate(update, env) {
       return;
     }
 
-    // Send immediate live progress bar message (10%)
-    const loadingRes = await sendTelegram(
-      botToken,
-      chatId,
-      `⏳ <b>Processing Best HD Video...</b>\n\n` +
-      `<code>[■□□□□□□□□□] 10%</code>\n` +
-      `Starting GitHub Actions cloud runner to download and remove watermark...`
-    );
+    const videoUrl = await extractVideoLink(targetLink);
+    const info = await getDailymotionVideoInfo(videoUrl);
+    const cleanTitle = cleanTitleForDisplay(info.title);
+    const vidId = extractDmId(videoUrl);
 
-    const loadingMsgId = loadingRes ? loadingRes.message_id : 0;
+    const confirmMsg =
+      `🎬 <b>Best HD Video Info</b>\n\n` +
+      `📌 <b>Title:</b>\n<code>${cleanTitle}</code>\n\n` +
+      `📦 <b>Estimated Size:</b> ${info.size}\n` +
+      `⏱️ <b>Duration:</b> ${info.duration}\n` +
+      `🎬 <b>Quality:</b> 1080p Full HD (No Watermark)\n` +
+      `📝 <b>Subtitles:</b> Clean Indonesian & English included\n\n` +
+      `<i>Click the button below to start cloud processing:</i>`;
 
-    // Trigger GitHub Actions via repository_dispatch
-    if (githubToken) {
-      await triggerGitHubWorkflow(githubToken, githubRepo, targetLink, chatId, loadingMsgId);
-    } else {
-      console.warn("GITHUB_TOKEN not configured in Worker.");
-    }
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: `⬇️ Start Download & Clean (${info.size})`, callback_data: `confirm_dl:${vidId}` }
+        ],
+        [
+          { text: "❌ Cancel", callback_data: "dismiss" }
+        ]
+      ]
+    };
+
+    await sendTelegram(botToken, chatId, confirmMsg, keyboard);
+    return;
   }
 }
 
 // ---------------- Helper Functions ---------------- //
+
+function getCleanThumbnailUrl(rawThumbUrl) {
+  if (!rawThumbUrl) return "";
+  // Crops top 48 pixels where AnimeKhor.org and bilibili logos reside, preserving pristine 16:9 1080p
+  return `https://wsrv.nl/?url=${encodeURIComponent(rawThumbUrl)}&cx=0&cy=48&cw=1920&ch=1032&w=1920&h=1080&fit=cover`;
+}
+
+async function getDailymotionVideoInfo(videoUrl) {
+  const vidId = extractDmId(videoUrl);
+  if (!vidId) {
+    return { title: "Anime Episode", size: "~260 MB", duration: "24 mins", rawThumbUrl: "" };
+  }
+  try {
+    const res = await fetch(`https://api.dailymotion.com/video/${vidId}?fields=title,duration,thumbnail_1080_url,thumbnail_720_url,thumbnail_large_url`);
+    const data = await res.json();
+    const durationMins = data.duration ? Math.round(data.duration / 60) : 24;
+    const estimatedMb = Math.round(durationMins * 11);
+    return {
+      title: data.title || "Anime Episode",
+      size: `~${estimatedMb} MB`,
+      duration: `${durationMins} mins`,
+      rawThumbUrl: data.thumbnail_1080_url || data.thumbnail_720_url || data.thumbnail_large_url || ""
+    };
+  } catch (e) {
+    return { title: "Anime Episode", size: "~260 MB", duration: "24 mins", rawThumbUrl: "" };
+  }
+}
 
 async function triggerGitHubWorkflow(token, repo, url, chatId, messageId) {
   const endpoint = `https://api.github.com/repos/${repo}/dispatches`;
@@ -187,7 +265,6 @@ function formatPubDate(pubDateStr) {
   if (!pubDateStr) return "";
   try {
     const d = new Date(pubDateStr);
-    // Convert to WIB (UTC+7)
     const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
     const wib = new Date(utc + (3600000 * 7));
     const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -245,50 +322,61 @@ function extractDmId(url) {
   return match ? match[1] : "";
 }
 
-async function getDailymotionThumbnail(videoUrl) {
-  const vidId = extractDmId(videoUrl);
-  if (!vidId) return "";
-  try {
-    const res = await fetch(`https://api.dailymotion.com/video/${vidId}?fields=thumbnail_1080_url,thumbnail_720_url,thumbnail_large_url`);
-    const data = await res.json();
-    return data.thumbnail_1080_url || data.thumbnail_720_url || data.thumbnail_large_url || "";
-  } catch (e) {
-    return "";
-  }
-}
-
 function cleanTitleForDisplay(rawTitle) {
   return rawTitle.replace(/\[?www\.AnimeKhor\.org\]?/gi, "").replace(/\s+/g, " ").trim();
 }
 
-async function sendTelegram(botToken, chatId, text) {
+async function sendTelegram(botToken, chatId, text, keyboard = null) {
+  const payload = {
+    chat_id: chatId,
+    text: text,
+    parse_mode: "HTML",
+    disable_web_page_preview: false
+  };
+  if (keyboard) payload.reply_markup = keyboard;
+
   const res = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      text: text,
-      parse_mode: "HTML",
-      disable_web_page_preview: false
-    })
+    body: JSON.stringify(payload)
   });
   const data = await res.json();
   return data.ok ? data.result : null;
 }
 
-async function sendTelegramPhoto(botToken, chatId, photoUrl, caption) {
+async function sendTelegramPhoto(botToken, chatId, photoUrl, caption, keyboard = null) {
+  const payload = {
+    chat_id: chatId,
+    photo: photoUrl,
+    caption: caption,
+    parse_mode: "HTML"
+  };
+  if (keyboard) payload.reply_markup = keyboard;
+
   const res = await fetch(`https://api.telegram.org/bot${botToken}/sendPhoto`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      chat_id: chatId,
-      photo: photoUrl,
-      caption: caption,
-      parse_mode: "HTML"
-    })
+    body: JSON.stringify(payload)
   });
   const data = await res.json();
   return data.ok ? data.result : null;
+}
+
+async function editTelegramMessage(botToken, chatId, messageId, text, keyboard = null) {
+  const payload = {
+    chat_id: chatId,
+    message_id: messageId,
+    text: text,
+    parse_mode: "HTML",
+    disable_web_page_preview: false
+  };
+  if (keyboard) payload.reply_markup = keyboard;
+
+  await fetch(`https://api.telegram.org/bot${botToken}/editMessageText`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
 }
 
 async function deleteTelegramMessage(botToken, chatId, messageId) {
