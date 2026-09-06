@@ -12,4 +12,4 @@ Seal/
 # Python cache & temporary files
 __pycache__/
 *.pyc
-notified_history.json
+
