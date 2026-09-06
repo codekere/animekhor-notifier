@@ -1,32 +1,33 @@
-# AnimeKhor Notifier (Clean & Minimalist)
+# AnimeKhor Notifier
 
-Sistem notifikasi otomatis episode baru AnimeKhor ke Telegram via **GitHub Actions** (100% cloud, gratis 24/7).
-
----
-
-## 📱 1. Fitur Notifier Telegram
-* **Notifikasi Otomatis**: Setiap AnimeKhor upload episode baru, bot langsung mengirim:
-  * 📌 Judul Episode
-  * 🔗 Link Seal (Dailymotion) siap copy-paste
-* **Perintah Bot**:
-  * `/last` : Menampilkan episode paling baru & link Seal-nya.
+Minimalist automated notification system for new AnimeKhor episodes via **GitHub Actions** and **Telegram Bot**.
 
 ---
 
-## ⚙️ 2. Konfigurasi GitHub Secrets
-Di repository ini, buka **Settings** > **Secrets and variables** > **Actions**:
-* `TELEGRAM_BOT_TOKEN` : Token bot dari [@BotFather](https://t.me/BotFather)
-* `TELEGRAM_CHAT_ID` : Chat ID angka Anda dari [@userinfobot](https://t.me/userinfobot)
+## 📱 Features
+* **Automated 24/7 Notifications**:
+  Whenever AnimeKhor publishes a new episode, the bot automatically sends:
+  * 📌 Episode Title
+  * 🔗 Direct Seal Link (Dailymotion)
+* **Bot Command**:
+  * `/last` : Fetch the latest published episode and its direct Seal download link on demand.
 
 ---
 
-## 🎬 3. Cara Hapus Watermark Otomatis di Seal (Android)
-Agar Seal di HP otomatis menghapus watermark `AnimeKhor.org` di pojok kiri atas saat download:
+## ⚙️ GitHub Secrets Configuration
+In this repository, navigate to **Settings** > **Secrets and variables** > **Actions**:
+* `TELEGRAM_BOT_TOKEN` : Bot token from [@BotFather](https://t.me/BotFather)
+* `TELEGRAM_CHAT_ID` : Your numeric Chat ID from [@userinfobot](https://t.me/userinfobot)
 
-1. Buka aplikasi **Seal** di HP.
-2. Masuk ke **Settings (Pengaturan)** > **Format / Unduhan** > **Custom Arguments (Argumen Kustom)**.
-3. Masukkan perintah berikut:
+---
+
+## 🎬 Automatic Watermark Removal in Seal (Android)
+To automatically remove the `AnimeKhor.org` top-left watermark when downloading via Seal:
+
+1. Open **Seal** on your Android device.
+2. Go to **Settings** > **Format / Download** > **Custom Arguments** (or Command Template).
+3. Add the following argument:
    ```text
    --ppa "ffmpeg:-vf delogo=x=2:y=2:w=170:h=48"
    ```
-4. Simpan. Sekarang setiap kali Anda mendownload link dari bot ke Seal, watermark pojok kiri atas otomatis terhapus bersih!
+4. Save. All downloaded videos will have the top-left watermark cleanly removed.

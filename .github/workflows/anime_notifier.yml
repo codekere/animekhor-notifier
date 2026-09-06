@@ -1,8 +1,10 @@
 name: Anime Episode Notifier
 
 on:
+  push:
+    branches: [ "main" ]
   schedule:
-    # Berjalan otomatis setiap 15 menit
+    # Runs every 15 minutes automatically
     - cron: '*/15 * * * *'
   workflow_dispatch:
 
@@ -22,14 +24,14 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Jalankan Notifier
+      - name: Run Notifier & Command Processor
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python anime_notifier.py
 
-      - name: Simpan Riwayat
+      - name: Commit & Push History Updates
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"

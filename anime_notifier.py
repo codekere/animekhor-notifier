@@ -2,10 +2,10 @@
 """
 AnimeKhor Notifier (Clean & Minimalist)
 =======================================
-Fitur:
-1. Memantau episode baru dari AnimeKhor.
-2. Mengirim notifikasi Telegram otomatis: Judul + Link Seal (Dailymotion).
-3. Perintah Telegram: Hanya /last untuk cek episode terbaru.
+Features:
+1. Monitors AnimeKhor RSS feed for new episodes.
+2. Sends automatic Telegram notification: Title + Direct Seal Link (Dailymotion).
+3. Telegram command: /last to fetch the latest episode and link on demand.
 """
 
 import os
@@ -45,12 +45,12 @@ def save_json(filepath: str, data):
 
 
 def extract_video_link(page_url: str) -> str:
-    """Mengekstrak URL Dailymotion murni yang siap dipakai di Seal."""
+    """Extract clean Dailymotion video URL ready for Seal."""
     try:
         req = urllib.request.Request(page_url, headers=HEADERS)
         html = urllib.request.urlopen(req, timeout=12).read().decode('utf-8', errors='ignore')
 
-        # Cari embed / player Dailymotion
+        # Find Dailymotion embed / player link
         dm_match = re.search(
             r'(?:https?:)?//(?:www\.|geo\.)?dailymotion\.com/(?:embed/video/|player\.html\?video=)([\w-]+)',
             html
@@ -59,7 +59,7 @@ def extract_video_link(page_url: str) -> str:
             video_id = dm_match.group(1)
             return f"https://www.dailymotion.com/video/{video_id}"
 
-        # Fallback iframe player lain jika ada
+        # Fallback to other iframe sources if available
         iframe_match = re.search(r'<iframe[^>]+src=["\']([^"\']+)["\']', html, re.I)
         if iframe_match:
             src = iframe_match.group(1)
@@ -67,12 +67,12 @@ def extract_video_link(page_url: str) -> str:
                 src = 'https:' + src
             return src
     except Exception as e:
-        print(f"[WARN] Gagal mengekstrak video dari {page_url}: {e}")
+        print(f"[WARN] Failed to extract video from {page_url}: {e}")
     return page_url
 
 
 def send_telegram(bot_token: str, chat_id: str, text: str):
-    """Mengirim pesan teks bersih ke Telegram."""
+    """Send clean HTML message to Telegram."""
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -88,26 +88,28 @@ def send_telegram(bot_token: str, chat_id: str, text: str):
     try:
         urllib.request.urlopen(req, timeout=10)
     except Exception as e:
-        print(f"[ERROR] Gagal kirim Telegram: {e}")
+        print(f"[ERROR] Failed to send Telegram message: {e}")
 
 
 def register_commands(bot_token: str):
-    """Daftarkan hanya 1 perintah resmi: /last."""
+    """Register official commands in Telegram menu."""
     url = f"https://api.telegram.org/bot{bot_token}/setMyCommands"
     payload = json.dumps({
         "commands": [
-            {"command": "last", "description": "Cek episode terbaru & ambil link"}
+            {"command": "last", "description": "Check latest episode and Seal link"},
+            {"command": "start", "description": "Bot overview and instructions"}
         ]
     }).encode('utf-8')
     req = urllib.request.Request(url, data=payload, headers={'Content-Type': 'application/json'})
     try:
         urllib.request.urlopen(req, timeout=10)
-    except Exception:
-        pass
+        print("[OK] Successfully registered commands menu with Telegram API (/last, /start).")
+    except Exception as e:
+        print(f"[WARN] Failed to setMyCommands: {e}")
 
 
 def get_latest_rss_item():
-    """Mengambil 1 item episode paling baru dari RSS."""
+    """Fetch the latest episode from AnimeKhor RSS feed."""
     try:
         req = urllib.request.Request(RSS_FEED_URL, headers=HEADERS)
         xml_data = urllib.request.urlopen(req, timeout=12).read()
@@ -119,14 +121,14 @@ def get_latest_rss_item():
                 "link": item.find('link').text.strip()
             }
     except Exception as e:
-        print(f"[ERROR] Gagal membaca feed: {e}")
+        print(f"[ERROR] Failed to parse RSS feed: {e}")
     return None
 
 
 def check_rss_updates(bot_token: str, chat_id: str):
-    """Cek apakah ada episode baru yang belum dinotifikasi."""
+    """Check RSS feed for newly published episodes."""
     history = set(load_json(HISTORY_FILE, []))
-    print(f"[*] Mengecek RSS update...")
+    print(f"[*] Checking RSS feed updates at {RSS_FEED_URL}...")
 
     try:
         req = urllib.request.Request(RSS_FEED_URL, headers=HEADERS)
@@ -134,7 +136,7 @@ def check_rss_updates(bot_token: str, chat_id: str):
         root = ET.fromstring(xml_data)
         items = root.findall('.//item')
     except Exception as e:
-        print(f"[ERROR] Gagal membaca RSS feed: {e}")
+        print(f"[ERROR] Failed to fetch RSS feed: {e}")
         return
 
     new_items = []
@@ -145,20 +147,20 @@ def check_rss_updates(bot_token: str, chat_id: str):
         if link not in history:
             video_url = extract_video_link(link)
             msg = (
-                f"🎬 <b>Episode Baru Rilis!</b>\n\n"
-                f"📌 <b>Judul:</b>\n<code>{title}</code>\n\n"
-                f"🔗 <b>Link Seal:</b>\n<code>{video_url}</code>"
+                f"🎬 <b>New Episode Released!</b>\n\n"
+                f"📌 <b>Title:</b>\n<code>{title}</code>\n\n"
+                f"🔗 <b>Seal Link:</b>\n<code>{video_url}</code>"
             )
             send_telegram(bot_token, chat_id, msg)
             history.add(link)
             new_items.append(title)
 
     save_json(HISTORY_FILE, list(history)[-100:])
-    print(f"[*] Selesai. {len(new_items)} episode baru dikirim.")
+    print(f"[*] Done. Sent {len(new_items)} new episode(s).")
 
 
 def process_user_commands(bot_token: str):
-    """Hanya memproses command /last."""
+    """Process incoming Telegram commands (/last, /start)."""
     last_offset = load_json(BOT_OFFSET_FILE, 0)
     url = f"https://api.telegram.org/bot{bot_token}/getUpdates?offset={last_offset}&timeout=5"
 
@@ -166,7 +168,8 @@ def process_user_commands(bot_token: str):
         req = urllib.request.Request(url)
         res = urllib.request.urlopen(req, timeout=10).read().decode('utf-8')
         updates = json.loads(res).get("result", [])
-    except Exception:
+    except Exception as e:
+        print(f"[WARN] Failed to fetch Telegram updates: {e}")
         return
 
     for update in updates:
@@ -179,18 +182,27 @@ def process_user_commands(bot_token: str):
         if not text or not chat_id:
             continue
 
-        # Respons hanya untuk /last, /start, /help
-        if text.startswith("/last") or text.startswith("/start") or text.startswith("/help"):
+        print(f"[USER] Command from {chat_id}: {text}")
+
+        if text.startswith("/last"):
             latest = get_latest_rss_item()
             if latest:
                 video_url = extract_video_link(latest["link"])
                 reply = (
-                    f"📌 <b>Episode Terakhir:</b>\n<code>{latest['title']}</code>\n\n"
-                    f"🔗 <b>Link Seal:</b>\n<code>{video_url}</code>"
+                    f"📌 <b>Latest Episode:</b>\n<code>{latest['title']}</code>\n\n"
+                    f"🔗 <b>Seal Link:</b>\n<code>{video_url}</code>"
                 )
             else:
-                reply = "❌ Gagal mengambil episode terbaru."
+                reply = "❌ Failed to fetch latest episode."
             send_telegram(bot_token, chat_id, reply)
+
+        elif text.startswith("/start") or text.startswith("/help"):
+            welcome = (
+                "👋 <b>AnimeKhor Notifier Bot</b>\n\n"
+                "Commands:\n"
+                "• /last - Check the latest episode and get the direct Seal link"
+            )
+            send_telegram(bot_token, chat_id, welcome)
 
     save_json(BOT_OFFSET_FILE, last_offset)
 
@@ -200,7 +212,7 @@ def main():
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
 
     if not bot_token or not chat_id:
-        print("[ERROR] TELEGRAM_BOT_TOKEN dan TELEGRAM_CHAT_ID belum diatur!")
+        print("[ERROR] TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are not set!")
         sys.exit(1)
 
     register_commands(bot_token)
