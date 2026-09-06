@@ -1,0 +1,38 @@
+name: Anime Episode Notifier
+
+on:
+  schedule:
+    # Berjalan otomatis setiap 15 menit
+    - cron: '*/15 * * * *'
+  workflow_dispatch: # Memungkinkan tombol "Run workflow" manual di GitHub
+
+jobs:
+  check-and-notify:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Jalankan Notifier & Bot Processor
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python anime_notifier.py
+
+      - name: Simpan Riwayat Episode & Offset Bot (Auto Commit)
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add notified_history.json bot_offset.json || true
+          git diff --quiet && git diff --staged --quiet || (git commit -m "chore: update history & bot offset [skip ci]" && git push)

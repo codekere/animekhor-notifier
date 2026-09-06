@@ -1,0 +1,15 @@
+# Abaikan folder unduhan video
+downloads/
+*.mp4
+*.mkv
+*.webm
+*.srt
+*.vtt
+
+# Abaikan folder project Android Seal (karena Seal adalah repo tersendiri)
+Seal/
+
+# Python cache & temporary files
+__pycache__/
+*.pyc
+notified_history.json
