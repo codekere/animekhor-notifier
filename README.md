@@ -1,6 +1,6 @@
-# AnimeKhor Notifier & Watermark Remover
+# AnimeKhor Notifier & Cloud Processor
 
-Automated pipeline for AnimeKhor episode notifications and cloud watermark removal via **GitHub Actions** and **Telegram Bot**.
+Automated pipeline for AnimeKhor episode notifications, cloud watermark removal, subtitle extraction, and audio conversion via **GitHub Actions** and **Telegram Bot**.
 
 ---
 
@@ -9,15 +9,21 @@ Automated pipeline for AnimeKhor episode notifications and cloud watermark remov
 * **Automated 24/7 Notifications**:
   Monitors AnimeKhor updates and sends clean Telegram alerts containing:
   * 📌 Clean Episode Title
-  * 🔗 Direct Dailymotion Link
-  * ⚡ 1-Tap copyable `/dl <url>` command
-* **Cloud Watermark Removal (`/dl`)**:
-  * Send `/dl <link>` to download and remove the top-left `AnimeKhor.org` watermark in the cloud.
+  * 🔗 Direct Dailymotion Link (tap code block to copy link alone, no prefixes)
+  * ⚡ 1-Tap Interactive Buttons:
+    * `[ 🎬 1080p Clean ]`
+    * `[ ⚡ 720p Clean ]`
+    * `[ 🎵 Audio (MP3) ]`
+    * `[ 🔇 Mute Video ]`
+* **Cloud Processing (`/dl`)**:
+  * Automatically removes the top-left `AnimeKhor.org` watermark using FFmpeg `delogo`.
+  * Extracts and cleans Indonesian (`.id.srt`) & English (`.en-auto.srt`) subtitles (promo watermarks stripped).
+  * Converts audio to `.mp3` for quick audio-only listening.
+  * Uploads all assets to **GitHub Releases CDN** for fast, direct downloads without Telegram's 50MB file size limits.
   * Your command message is automatically deleted to keep the chat clean.
-  * The bot displays a processing status and edits it in-place to provide a high-speed direct download link from GitHub Releases.
-  * Includes a `🗑️ Dismiss` button to easily clear the message.
+  * Includes a `🗑️ Dismiss / Close` button to instantly clear the result message like a popup.
 * **On-Demand Check (`/last`)**:
-  * `/last` : Retrieve the latest published episode and its download command.
+  * `/last` : Retrieve the latest published episode, direct link, and interactive download buttons.
 
 ---
 
@@ -29,9 +35,18 @@ In this repository, navigate to **Settings** > **Secrets and variables** > **Act
 
 ---
 
-## 🚀 How to Download Watermark-Free Videos
+## 🚀 How to Use
 
-1. When a new episode notification arrives on Telegram, copy the provided `/dl <url>` command (tap on the code block to copy).
-2. Send `/dl <url>` to the bot (or type `/dl` alone to automatically download the latest episode).
-3. Wait ~2-3 minutes while GitHub Actions downloads the 1080p stream and re-encodes the video with FFmpeg `delogo`.
-4. Click the download link provided by the bot to save the clean MP4 directly to your phone.
+* **Option 1: 1-Tap Buttons (Easiest)**
+  When an episode alert arrives, simply tap any button below the message:
+  * `[ 🎬 1080p Clean ]` : Full HD watermark-free video + subtitle + audio.
+  * `[ ⚡ 720p Clean ]` : Smaller 720p clean video (faster download).
+  * `[ 🎵 Audio (MP3) ]` : Pure MP3 audio track.
+  * `[ 🔇 Mute Video ]` : Video without audio track.
+
+* **Option 2: Text Commands**
+  * `/dl <link>` : Download 1080p clean video.
+  * `/dl 720p <link>` : Download 720p clean video.
+  * `/dl audio <link>` : Extract MP3 audio only.
+  * `/dl mute <link>` : Video without audio track.
+  * `/dl` : Download the latest published episode automatically.
