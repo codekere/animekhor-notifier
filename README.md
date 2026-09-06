@@ -4,10 +4,32 @@ Automated pipeline for AnimeKhor episode notifications, 16:9 thumbnail extractio
 
 ---
 
-## 📱 Commands
+## ⚡ Instant Response via Cloudflare Worker
 
-* `/last` : Retrieve the latest episode from AnimeKhor with its 16:9 thumbnail and direct link.
-* `/link <page-url>` : Convert an AnimeKhor webpage URL to a clean Dailymotion video link + 16:9 thumbnail.
+To have your Telegram bot reply **instantly (sub-second)** to `/last`, `/link`, and `/dl`:
+
+1. Go to your [Cloudflare Dashboard](https://dash.cloudflare.com/) > **Workers & Pages** > **Create application** > **Create Worker**.
+2. Name it (e.g. `animekhor-bot`), click **Deploy**, then click **Edit code**.
+3. Replace the code with the contents of [`cloudflare_worker.js`](file:///c:/Users/User/Desktop/Downloader/cloudflare_worker.js) and click **Deploy**.
+4. Go to **Settings** > **Variables and Secrets** of the Worker and add:
+   * `TELEGRAM_BOT_TOKEN` : Your bot token from [@BotFather](https://t.me/BotFather)
+   * `TELEGRAM_CHAT_ID` : (Optional) Your numeric Chat ID to restrict access
+   * `GITHUB_TOKEN` : A GitHub Personal Access Token (Classic PAT with `repo` scope from [GitHub Tokens](https://github.com/settings/tokens))
+   * `GITHUB_REPO` : `codekere/animekhor-notifier`
+5. Set the Telegram Webhook:
+   Open your browser and visit:
+   ```text
+   https://api.telegram.org/bot<YOUR_BOT_TOKEN>/setWebhook?url=https://<YOUR_WORKER_SUBDOMAIN>.workers.dev
+   ```
+   *(Replace `<YOUR_BOT_TOKEN>` and your Worker URL)*.
+   Once set, all `/last`, `/link`, and `/dl` commands will reply in **under 1 second**!
+
+---
+
+## 📱 Bot Commands
+
+* `/last` : Retrieve the latest episode from AnimeKhor with clean 16:9 thumbnail and direct link.
+* `/link <page-url>` : Convert an AnimeKhor webpage URL to a clean Dailymotion video link + 16:9 thumbnail (defaults to latest if no URL provided).
 * `/dl` : Download the latest episode in Best HD (1080p + Audio + Subtitle with watermark removed).
 * `/dl <link>` : Download a specific episode in Best HD with watermark removed.
 * `/start` : Bot overview and command guide.
@@ -22,8 +44,7 @@ In this repository, navigate to **Settings** > **Secrets and variables** > **Act
 
 ---
 
-## 🚀 Usage Guide
+## 🧹 Automatic Storage & Log Cleanup
 
-1. **Get Latest Episode:** Send `/last` to fetch the newest episode and 16:9 Full HD thumbnail.
-2. **Convert Any Page:** Send `/link https://animekhor.org/...` to convert a webpage to a direct video link.
-3. **Cloud Download (No WM):** Send `/dl` or `/dl <video-link>` to generate a watermark-free 1080p MP4 and clean `.srt` subtitles.
+* **GitHub Actions Runners**: Fully ephemeral. Every job runs in an isolated virtual machine; all temporary videos and logs are destroyed upon job completion.
+* **GitHub Releases CDN**: Automatically pruned to keep only the newest 3 releases, preventing repository storage accumulation.

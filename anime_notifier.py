@@ -5,21 +5,21 @@ AnimeKhor Notifier & Best HD Cloud Processor
 Features:
 1. Monitors AnimeKhor RSS feed for new episodes.
 2. Sends clean Telegram alerts with:
-   - 16:9 Full HD Thumbnail (embedded photo preview + direct 1080p link)
+   - 16:9 Full HD Thumbnail with watermark automatically REMOVED via delogo
    - Clean Episode Title
    - 1-Tap copyable direct link (no /dl prefix, link alone)
 3. Commands:
-   - /last           : Retrieve the latest published episode with 16:9 thumbnail and direct link
-   - /link <page_url>: Convert an AnimeKhor webpage URL to a direct Dailymotion link + 16:9 thumbnail
+   - /last           : Retrieve the latest published episode with clean 16:9 thumbnail
+   - /link <page_url>: Convert AnimeKhor webpage to direct video link (defaults to latest if no arg)
    - /dl <link>      : Download Best HD video + Audio + Subtitle with watermark removed
    - /start          : Bot overview & instructions
 4. Cloud Processing:
-   - Always downloads the Best HD quality available (1080p).
+   - Always downloads Best HD quality available (1080p).
    - Automatically removes AnimeKhor.org watermark using FFmpeg delogo.
    - Extracts and cleans Indonesian (.id.srt) & English (.en.srt) subtitles.
    - Computes exact final file size.
    - Uploads to GitHub Releases for direct high-speed CDN download.
-   - In-place message edit with Dismiss button to keep chat clean.
+   - In-place message edit with Dismiss button.
 """
 
 import os
@@ -146,6 +146,41 @@ def get_dailymotion_thumbnail(video_url: str) -> str:
     return ""
 
 
+def prepare_clean_thumbnail(video_url: str, output_path: str = "clean_thumb.jpg") -> str:
+    """Download thumbnail and remove AnimeKhor watermark using FFmpeg delogo."""
+    thumb_url = get_dailymotion_thumbnail(video_url)
+    if not thumb_url:
+        return ""
+
+    temp_raw_thumb = f"raw_thumb_{int(time.time())}.jpg"
+    try:
+        req = urllib.request.Request(thumb_url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            with open(temp_raw_thumb, "wb") as f:
+                f.write(resp.read())
+
+        # Delogo the thumbnail image (top-left watermark removal)
+        cmd = [
+            "ffmpeg", "-y", "-i", temp_raw_thumb,
+            "-vf", "delogo=x=2:y=2:w=170:h=48",
+            "-frames:v", "1",
+            output_path
+        ]
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+        if os.path.exists(output_path):
+            return output_path
+    except Exception as e:
+        print(f"[WARN] Failed to clean thumbnail: {e}")
+    finally:
+        if os.path.exists(temp_raw_thumb):
+            try:
+                os.remove(temp_raw_thumb)
+            except Exception:
+                pass
+    return ""
+
+
 def send_telegram(bot_token: str, chat_id: str, text: str, reply_markup=None) -> int:
     """Send clean HTML message to Telegram and return message_id."""
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -173,33 +208,62 @@ def send_telegram(bot_token: str, chat_id: str, text: str, reply_markup=None) ->
     return 0
 
 
-def send_telegram_photo(bot_token: str, chat_id: str, photo_url: str, caption: str, reply_markup=None) -> int:
-    """Send photo with HTML caption to Telegram."""
-    if not photo_url:
+def send_telegram_local_photo(bot_token: str, chat_id: str, image_path: str, caption: str, reply_markup=None) -> int:
+    """Upload clean local image file directly to Telegram sendPhoto."""
+    if not image_path or not os.path.exists(image_path):
         return send_telegram(bot_token, chat_id, caption, reply_markup=reply_markup)
 
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
-    payload = {
-        "chat_id": chat_id,
-        "photo": photo_url,
-        "caption": caption,
-        "parse_mode": "HTML"
-    }
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
+    boundary = "----WebKitFormBoundary" + str(int(time.time()))
 
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode('utf-8'),
-        headers={'Content-Type': 'application/json'}
-    )
     try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
+        with open(image_path, "rb") as f:
+            img_bytes = f.read()
+
+        filename = os.path.basename(image_path)
+        body = bytearray()
+
+        # chat_id field
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(b'Content-Disposition: form-data; name="chat_id"\r\n\r\n')
+        body.extend(f"{chat_id}\r\n".encode())
+
+        # caption field
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(b'Content-Disposition: form-data; name="caption"\r\n\r\n')
+        body.extend(caption.encode("utf-8"))
+        body.extend(b"\r\n")
+
+        # parse_mode field
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(b'Content-Disposition: form-data; name="parse_mode"\r\n\r\n')
+        body.extend(b"HTML\r\n")
+
+        # photo file field
+        body.extend(f"--{boundary}\r\n".encode())
+        body.extend(f'Content-Disposition: form-data; name="photo"; filename="{filename}"\r\n'.encode())
+        body.extend(b"Content-Type: image/jpeg\r\n\r\n")
+        body.extend(img_bytes)
+        body.extend(b"\r\n")
+
+        # closing boundary
+        body.extend(f"--{boundary}--\r\n".encode())
+
+        req = urllib.request.Request(
+            url,
+            data=bytes(body),
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "User-Agent": "Mozilla/5.0"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
             if data.get("ok"):
                 return data["result"]["message_id"]
     except Exception as e:
-        print(f"[WARN] sendPhoto failed: {e}, falling back to sendMessage")
+        print(f"[WARN] Failed to send local photo: {e}")
+
     return send_telegram(bot_token, chat_id, caption, reply_markup=reply_markup)
 
 
@@ -344,7 +408,7 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
     print(f"[*] Starting Best HD processing for URL: {video_url}")
 
     timestamp = int(time.time())
-    raw_video = f"raw_{timestamp}.mp4"
+    prefix = f"raw_{timestamp}"
     clean_video = ""
     files_to_upload = []
 
@@ -359,47 +423,72 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
     clean_video = sanitize_filename(display_title, "mp4")
 
     try:
-        # 2. Download Best HD Video + Best Audio + Subtitles
-        print(f"[*] Downloading stream (Best HD) and subtitles...")
+        # 2. Download Stream using yt-dlp
+        print(f"[*] Downloading video & audio stream with yt-dlp...")
         dl_cmd = [
             sys.executable, "-m", "yt_dlp",
             "-f", "bestvideo+bestaudio/best",
-            "--merge-output-format", "mp4",
+            "--no-playlist",
+            "--no-warnings",
             "--write-sub", "--sub-lang", "id,en-auto",
-            "-o", raw_video,
-            "-o", f"subtitle:sub_{timestamp}.%(ext)s",
+            "-o", f"{prefix}_video.%(ext)s",
+            "-o", f"subtitle:{prefix}_sub.%(ext)s",
             video_url
         ]
-        subprocess.run(dl_cmd, check=True)
+        res = subprocess.run(dl_cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            print(f"[WARN] Initial yt-dlp failed, retrying without subs: {res.stderr[:200]}")
+            dl_retry = [
+                sys.executable, "-m", "yt_dlp",
+                "-f", "bestvideo+bestaudio/best",
+                "--no-playlist",
+                "-o", f"{prefix}_video.%(ext)s",
+                video_url
+            ]
+            res_retry = subprocess.run(dl_retry, capture_output=True, text=True)
+            if res_retry.returncode != 0:
+                raise RuntimeError(f"yt-dlp error: {res_retry.stderr[-300:]}")
 
-        if not os.path.exists(raw_video):
-            raise FileNotFoundError("Video stream download failed.")
+        # Locate downloaded media files
+        downloaded_files = glob.glob(f"{prefix}_video*")
+        downloaded_files = [f for f in downloaded_files if not f.endswith(".ytdl") and not f.endswith(".part")]
+        if not downloaded_files:
+            raise FileNotFoundError("Video stream download failed: no media files found.")
 
-        # 3. Detect resolution & compute delogo box
-        w, h = get_video_dimensions(raw_video)
+        # Determine primary video file for dimension detection
+        primary_video = downloaded_files[0]
+        w, h = get_video_dimensions(primary_video)
         delogo_vf = get_delogo_filter(h)
-        print(f"[*] Video dimensions: {w}x{h}, delogo: {delogo_vf}")
+        print(f"[*] Media files found: {downloaded_files}, dimensions: {w}x{h}, delogo: {delogo_vf}")
 
-        # 4. Run FFmpeg delogo re-encoding
+        # Construct FFmpeg input arguments
+        input_args = []
+        for f in downloaded_files:
+            input_args.extend(["-i", f])
+
+        # Run FFmpeg delogo re-encoding
         ffmpeg_cmd = [
-            "ffmpeg", "-y", "-i", raw_video,
+            "ffmpeg", "-y",
+            *input_args,
             "-vf", delogo_vf,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
             "-c:a", "copy",
             clean_video
         ]
-        print(f"[*] Re-encoding video to remove watermark...")
-        subprocess.run(ffmpeg_cmd, check=True)
+        print(f"[*] Running FFmpeg delogo re-encoding...")
+        ff_res = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+        if ff_res.returncode != 0:
+            raise RuntimeError(f"FFmpeg error: {ff_res.stderr[-300:]}")
 
         if not os.path.exists(clean_video):
-            raise FileNotFoundError("Watermark-free video file was not created.")
+            raise FileNotFoundError("Watermark-free video output file was not generated.")
 
         files_to_upload.append(clean_video)
         final_video_size = os.path.getsize(clean_video)
         file_size_str = format_file_size(final_video_size)
 
-        # 5. Clean downloaded subtitles (.srt)
-        sub_files = glob.glob(f"sub_{timestamp}*.srt")
+        # 3. Clean and include downloaded subtitles (.srt)
+        sub_files = glob.glob(f"{prefix}_sub*.srt")
         for sf in sub_files:
             lang = "ID" if ".id." in sf else "EN"
             final_sub = sanitize_filename(f"{display_title}_{lang}", "srt")
@@ -407,7 +496,7 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
             if os.path.exists(final_sub):
                 files_to_upload.append(final_sub)
 
-        # 6. Upload to GitHub Releases
+        # 4. Upload to GitHub Releases
         tag = f"dl-{timestamp}"
         repo = os.environ.get("GITHUB_REPOSITORY", "codekere/animekhor-notifier")
         print(f"[*] Uploading clean assets to release {tag} in {repo}...")
@@ -422,7 +511,7 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
 
         base_dl_url = f"https://github.com/{repo}/releases/download/{tag}"
 
-        # 7. Generate download links
+        # 5. Build Download Links
         video_download_url = f"{base_dl_url}/{urllib.parse.quote(clean_video)}"
         sub_links = []
         for f in files_to_upload:
@@ -431,9 +520,9 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
                 sub_url = f"{base_dl_url}/{urllib.parse.quote(f)}"
                 sub_links.append(f"• <a href=\"{sub_url}\"><b>Download Subtitle ({lang_tag} .SRT)</b></a>")
 
-        subs_section = "\n".join(sub_links) if sub_links else "• <i>Subtitles embedded in video</i>"
+        subs_section = "\n".join(sub_links) if sub_links else "• <i>Subtitles embedded in stream</i>"
 
-        # 8. Prune old releases (keep latest 3)
+        # 6. Prune old releases (keep latest 3)
         try:
             out = subprocess.check_output(["gh", "release", "list", "--limit", "10"]).decode()
             tags = [line.split()[0] for line in out.strip().splitlines() if line]
@@ -443,7 +532,7 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
         except Exception as e:
             print(f"[WARN] Failed to delete older releases: {e}")
 
-        # 9. Update Telegram loading message to success
+        # 7. Update Telegram loading message
         success_msg = (
             f"✅ <b>Clean Video Ready!</b>\n\n"
             f"📌 <b>Title:</b>\n<code>{display_title}</code>\n\n"
@@ -458,12 +547,12 @@ def download_and_clean(target_url: str, bot_token: str, chat_id: str, loading_ms
 
     except Exception as e:
         print(f"[ERROR] Process failed: {e}")
-        err_msg = f"❌ <b>Download Failed:</b>\n<code>{str(e)[:200]}</code>"
+        err_msg = f"❌ <b>Download Failed:</b>\n<code>{str(e)[:300]}</code>"
         edit_telegram_message(bot_token, chat_id, loading_msg_id, err_msg, reply_markup=DISMISS_KEYBOARD)
 
     finally:
-        # Cleanup temporary files
-        to_clean = [raw_video, *files_to_upload, *glob.glob(f"sub_{timestamp}*")]
+        # Cleanup temporary files (Zero Storage Leaks)
+        to_clean = [*glob.glob(f"{prefix}*"), *files_to_upload]
         for f in to_clean:
             if os.path.exists(f):
                 try:
@@ -489,17 +578,14 @@ def get_latest_rss_item():
     return None
 
 
-def format_episode_message(title: str, video_url: str, thumb_url: str = "") -> str:
-    """Format clean episode message with 1-tap copyable link and 16:9 thumbnail link."""
+def format_episode_message(title: str, video_url: str) -> str:
+    """Format clean episode message with 1-tap copyable link (no /dl prefix, no thumbnail link)."""
     clean_title = clean_title_for_display(title)
-    msg = (
+    return (
         f"🎬 <b>New Episode Released!</b>\n\n"
         f"📌 <b>Title:</b>\n<code>{clean_title}</code>\n\n"
         f"🔗 <b>Direct Link:</b>\n<code>{video_url}</code>"
     )
-    if thumb_url:
-        msg += f"\n\n🖼️ <b>16:9 Thumbnail (1080p):</b>\n<a href=\"{thumb_url}\">Open / Save 16:9 Thumbnail</a>"
-    return msg
 
 
 def check_rss_updates(bot_token: str, chat_id: str):
@@ -517,17 +603,26 @@ def check_rss_updates(bot_token: str, chat_id: str):
         return
 
     new_items = []
+    clean_thumb_path = "clean_thumb.jpg"
+
     for item in reversed(items):
         link = item.find('link').text.strip()
         title = item.find('title').text.strip()
 
         if link not in history:
             video_url = extract_video_link(link)
-            thumb_url = get_dailymotion_thumbnail(video_url)
-            msg = format_episode_message(title, video_url, thumb_url)
+            msg = format_episode_message(title, video_url)
 
-            # Send photo with embedded 16:9 preview, or fallback to text message
-            send_telegram_photo(bot_token, chat_id, thumb_url, msg)
+            # Generate delogoed 16:9 thumbnail and upload directly to Telegram
+            clean_thumb = prepare_clean_thumbnail(video_url, clean_thumb_path)
+            send_telegram_local_photo(bot_token, chat_id, clean_thumb, msg)
+
+            if os.path.exists(clean_thumb_path):
+                try:
+                    os.remove(clean_thumb_path)
+                except Exception:
+                    pass
+
             history.add(link)
             new_items.append(title)
 
@@ -535,15 +630,18 @@ def check_rss_updates(bot_token: str, chat_id: str):
     print(f"[*] Done. Sent {len(new_items)} new episode(s).")
 
 
-def process_user_commands(bot_token: str, direct_url: str = ""):
-    """Process incoming Telegram commands (/last, /link, /dl, /start, and dismiss button)."""
+def process_user_commands(bot_token: str, direct_url: str = "", custom_msg_id: int = 0):
+    """Process incoming Telegram commands or webhook/dispatch triggers."""
     if direct_url:
         chat_id = os.environ.get("TELEGRAM_CHAT_ID")
         if chat_id:
-            loading_id = send_telegram(
-                bot_token, chat_id,
-                "⏳ <b>Processing Best HD Video...</b>\nDownloading best quality and removing watermark. Please wait ~2-3 minutes..."
-            )
+            if custom_msg_id:
+                loading_id = custom_msg_id
+            else:
+                loading_id = send_telegram(
+                    bot_token, chat_id,
+                    "⏳ <b>Processing Best HD Video...</b>\nDownloading best quality and removing watermark. Please wait ~2-3 minutes..."
+                )
             download_and_clean(direct_url, bot_token, chat_id, loading_id)
         return
 
@@ -557,6 +655,8 @@ def process_user_commands(bot_token: str, direct_url: str = ""):
     except Exception as e:
         print(f"[WARN] Failed to fetch Telegram updates: {e}")
         return
+
+    clean_thumb_path = "clean_thumb_cmd.jpg"
 
     for update in updates:
         update_id = update["update_id"]
@@ -616,14 +716,19 @@ def process_user_commands(bot_token: str, direct_url: str = ""):
             )
             download_and_clean(target_link, bot_token, chat_id, loading_id)
 
-        # 2. /last : Get latest episode from RSS feed
+        # 2. /last : Get latest episode from RSS feed with clean thumbnail
         elif text.startswith("/last"):
             latest = get_latest_rss_item()
             if latest:
                 video_url = extract_video_link(latest["link"])
-                thumb_url = get_dailymotion_thumbnail(video_url)
-                reply = format_episode_message(latest["title"], video_url, thumb_url)
-                send_telegram_photo(bot_token, chat_id, thumb_url, reply)
+                reply = format_episode_message(latest["title"], video_url)
+                clean_thumb = prepare_clean_thumbnail(video_url, clean_thumb_path)
+                send_telegram_local_photo(bot_token, chat_id, clean_thumb, reply)
+                if os.path.exists(clean_thumb_path):
+                    try:
+                        os.remove(clean_thumb_path)
+                    except Exception:
+                        pass
             else:
                 send_telegram(bot_token, chat_id, "❌ Failed to fetch latest episode.")
 
@@ -639,21 +744,30 @@ def process_user_commands(bot_token: str, direct_url: str = ""):
                 if match:
                     target_page = match.group(0)
 
+            # If no parameter, automatically use latest episode!
+            if not target_page:
+                latest = get_latest_rss_item()
+                if latest:
+                    target_page = latest["link"]
+
             if not target_page:
                 send_telegram(bot_token, chat_id, "❌ <b>Usage:</b> <code>/link &lt;animekhor-page-url&gt;</code>")
                 continue
 
             video_url = extract_video_link(target_page)
-            thumb_url = get_dailymotion_thumbnail(video_url)
             page_slug = target_page.rstrip("/").split("/")[-1].replace("-", " ").title()
             reply = (
                 f"🎬 <b>Direct Video Link Ready!</b>\n\n"
                 f"📌 <b>Page:</b>\n<code>{page_slug}</code>\n\n"
                 f"🔗 <b>Direct Link:</b>\n<code>{video_url}</code>"
             )
-            if thumb_url:
-                reply += f"\n\n🖼️ <b>16:9 Thumbnail (1080p):</b>\n<a href=\"{thumb_url}\">Open / Save 16:9 Thumbnail</a>"
-            send_telegram_photo(bot_token, chat_id, thumb_url, reply)
+            clean_thumb = prepare_clean_thumbnail(video_url, clean_thumb_path)
+            send_telegram_local_photo(bot_token, chat_id, clean_thumb, reply)
+            if os.path.exists(clean_thumb_path):
+                try:
+                    os.remove(clean_thumb_path)
+                except Exception:
+                    pass
 
         # 4. /start or /help : Bot instructions
         elif text.startswith("/start") or text.startswith("/help"):
@@ -661,7 +775,7 @@ def process_user_commands(bot_token: str, direct_url: str = ""):
                 "👋 <b>AnimeKhor Notifier & Best HD Downloader</b>\n\n"
                 "<b>Features:</b>\n"
                 "• Tap any link to copy it instantly\n"
-                "• 16:9 HD Thumbnail included with each episode for YouTube\n\n"
+                "• Watermark-free 16:9 Full HD Thumbnail included\n\n"
                 "<b>Commands:</b>\n"
                 "• /last - Check latest episode from AnimeKhor\n"
                 "• /link &lt;page-url&gt; - Convert webpage URL to direct video link\n"
@@ -676,7 +790,10 @@ def process_user_commands(bot_token: str, direct_url: str = ""):
 def main():
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+
+    # Check for direct inputs from workflow_dispatch or repository_dispatch
     input_url = os.environ.get("INPUT_URL", "").strip()
+    input_msg_id = int(os.environ.get("INPUT_MSG_ID", "0") or "0")
 
     if not bot_token or not chat_id:
         print("[ERROR] TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are not set!")
@@ -684,8 +801,8 @@ def main():
 
     register_commands(bot_token)
     if input_url:
-        print(f"[*] Direct URL trigger: {input_url}")
-        process_user_commands(bot_token, direct_url=input_url)
+        print(f"[*] Direct URL trigger: {input_url} (msg_id: {input_msg_id})")
+        process_user_commands(bot_token, direct_url=input_url, custom_msg_id=input_msg_id)
     else:
         check_rss_updates(bot_token, chat_id)
         process_user_commands(bot_token)
